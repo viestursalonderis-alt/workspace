@@ -100,18 +100,19 @@ def _t_assess_severity(session: ClaimSession, inp: dict[str, Any]) -> str:
     return _err("permanent", False, "TODO: _t_assess_severity not implemented yet")
 
 
-def _t_request_clarification(session: ClaimSession, inp: dict[str, Any]) -> str:
-    # TODO:Implement the clarification dispatcher.
-    #   1. Validate inp["question"] is a string and inp["ambiguity_between"] is a list of
-    #      at least 2 entries; otherwise return _err("permanent", False, ...).
-    #   2. Record the asked clarification in session.clarifications_asked (so the runner
-    #      can count it).
-    #   3. Substring-match the question (case-insensitive) against the keys in
-    #      session.clarification_responses; if any key appears in the question, return
-    #      _ok({"claimant_reply": <the matching reply>}).
-    #   4. Otherwise return _ok({"claimant_reply": "NO_RESPONSE"}).
-    return _err("permanent", False, "TODO: _t_request_clarification not implemented yet")
-
+def _t_request_clarification(session, inp):
+    question = inp.get("question")
+    candidates = inp.get("ambiguity_between")
+    if not isinstance(question, str):
+        return _err("permanent", False, "question must be a string")
+    if not isinstance(candidates, list) or len(candidates) < 2:
+        return _err("permanent", False, "ambiguity_between must list at least two candidate types")
+    session.clarifications_asked.append({"question": question, "candidates": list(candidates)})
+    qlow = question.lower()
+    for pattern, reply in session.clarification_responses.items():
+        if pattern.lower() in qlow:
+            return _ok({"claimant_reply": reply})
+    return _ok({"claimant_reply": "NO_RESPONSE"})
 
 def _t_route_to_adjuster(session: ClaimSession, inp: dict[str, Any]) -> str:
     # TODO:Implement the routing terminal tool.

@@ -43,7 +43,24 @@ SEVERITIES = ["low", "medium", "high"]
 #     Commits the model to a severity bucket.
 #
 # Later tools (request_clarification, route_to_adjuster, escalate_to_human) extend this list.
-TOOL_SCHEMAS: list[dict[str, Any]] = []
+TOOL_SCHEMAS: list[dict[str, Any]] = [
+    {
+        "name": "lookup_policy",
+        "description": (
+            "Look up a policyholder's coverage record. Use this early in the "
+            "conversation to confirm the policy exists, what is covered, and the "
+            "deductible. Returns coverage, deductible, status, and policy_holder."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "policy_id": {"type": "string", "description": "Policy identifier, e.g. POL-1001"}
+            },
+            "required": ["policy_id"],
+        },
+    },
+    # ... record_claim_fact, classify_claim, assess_severity follow the same structure.
+]
 
 # ----------------------------------------------------------------------------
 # Errors — Graceful Tool Failure shape
@@ -51,19 +68,57 @@ TOOL_SCHEMAS: list[dict[str, Any]] = []
 
 
 def _err(category: str, retryable: bool, message: str) -> str:
-    # TODO:Return a JSON string with these keys (the Graceful Tool Failure shape):
-    #   is_error: True
-    #   error_category: category   ("transient" or "permanent")
-    #   is_retryable: retryable
-    #   message: message
-    # The shape is what tool_result content carries when the model needs to read an error
-    # and adapt rather than crash the loop.
-    return '{"is_error": true, "message": "TODO: _err not implemented"}'
+    return json.dumps({
+        "is_error": True,
+        "error_category": category,
+        "is_retryable": retryable,
+        "message": message,
+    })
+
+def _ok(payload: dict[str, Any]) -> str:
+    return json.dumps(payload)
 
 
 def _ok(payload: dict[str, Any]) -> str:
-    # TODO:Return json.dumps(payload). Tool results are always strings;
-    # the model parses them on the next turn.
+TOOL_SCHEMAS: list[dict[str, Any]] = [
+    {
+        "name": "lookup_policy",
+        "description": (
+            "Look up a policyholder's coverage record. Use this early in the "
+            "conversation to confirm the policy exists, what is covered, and the "
+            "deductible. Returns coverage, deductible, status, and policy_holder."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "policy_id": {"type": "string", "description": "Policy identifier, e.g. POL-1001"}
+            },
+            "required": ["policy_id"],
+        },
+    },
+    {
+    "name": "request_clarification",
+    "description": (
+        "Ask the claimant ONE clarifying question to disambiguate the claim "
+        "type or fill a critical missing fact. Use only when the claim type "
+        "is genuinely ambiguous between two or more types. Returns the "
+        "claimant's reply, or NO_RESPONSE if the claimant cannot answer."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "question": {"type": "string"},
+            "ambiguity_between": {
+                "type": "array",
+                "items": {"type": "string", "enum": CLAIM_TYPES},
+                "minItems": 2,
+            },
+        },
+        "required": ["question", "ambiguity_between"],
+    },
+},
+    # ... record_claim_fact, classify_claim, assess_severity follow the same structure.
+]
     return "{}"
 
 
@@ -100,44 +155,29 @@ def _t_assess_severity(session: ClaimSession, inp: dict[str, Any]) -> str:
     return _err("permanent", False, "TODO: _t_assess_severity not implemented yet")
 
 
-def _t_request_clarification(session: ClaimSession, inp: dict[str, Any]) -> str:
-    # TODO:Implement the clarification dispatcher.
-    #   1. Validate inp["question"] is a string and inp["ambiguity_between"] is a list of
-    #      at least 2 entries; otherwise return _err("permanent", False, ...).
-    #   2. Record the asked clarification in session.clarifications_asked (so the runner
-    #      can count it).
-    #   3. Substring-match the question (case-insensitive) against the keys in
-    #      session.clarification_responses; if any key appears in the question, return
-    #      _ok({"claimant_reply": <the matching reply>}).
-    #   4. Otherwise return _ok({"claimant_reply": "NO_RESPONSE"}).
-    return _err("permanent", False, "TODO: _t_request_clarification not implemented yet")
+def _t_request_clarification(session, inp):
+    question = inp.get("question")
+    candidates = inp.get("ambiguity_between")
+    if not isinstance(question, str):
+        return _err("permanent", False, "question must be a string")
+    if not isinstance(candidates, list) or len(candidates) < 2:
+        return _err("permanent", False, "ambiguity_between must list at least two candidate types")
+    session.clarifications_asked.append({"question": question, "candidates": list(candidates)})
+    qlow = question.lower()
+    for pattern, reply in session.clarification_responses.items():
+        if pattern.lower() in qlow:
+            return _ok({"claimant_reply": reply})
+    return _ok({"claimant_reply": "NO_RESPONSE"})
 
+def _t_route_to_adjuster(session, inp):
+    if session.terminal_called:
+        return _err("permanent", False, "terminal tool already called this claim")
+    # validation, build record, _append_jsonl, set session.routing, return _ok(...)
 
-def _t_route_to_adjuster(session: ClaimSession, inp: dict[str, Any]) -> str:
-    # TODO:Implement the routing terminal tool.
-    #   1. Guard against double-terminal: if session.terminal_called, return an error.
-    #   2. Validate inp["queue"] is in CLAIM_TYPES and inp["claim_summary"] is a string.
-    #   3. Require session.classification and session.severity to be set; otherwise error.
-    #   4. Build the routing record (claim_id, policy_id, claim_type, severity, confidence,
-    #      rationale, claim_summary, case_facts) and assign it to session.routing.
-    #   5. Append the record to runs/<run>/queues/<queue>.jsonl via _append_jsonl.
-    #   6. Return _ok({"routed": True, "queue": queue}).
-    return _err("permanent", False, "TODO: _t_route_to_adjuster not implemented yet")
-
-
-def _t_escalate_to_human(session: ClaimSession, inp: dict[str, Any]) -> str:
-    # TODO:Implement the escalation terminal tool.
-    #   1. Guard against double-terminal: if session.terminal_called, return an error.
-    #   2. Validate inp["reason"] is a string and inp["structured_summary"] is a dict
-    #      containing all required keys: policy_id, root_cause, candidate_claim_types,
-    #      case_facts, recommended_action, confidence. Return an error listing any missing
-    #      fields by name.
-    #   3. Build the escalation record (claim_id, policy_id, reason, **structured_summary,
-    #      case_facts_at_escalation) and assign it to session.escalation.
-    #   4. Append it to runs/<run>/escalations.jsonl via _append_jsonl.
-    #   5. Return _ok({"escalated": True}).
-    return _err("permanent", False, "TODO: _t_escalate_to_human not implemented yet")
-
+def _t_escalate_to_human(session, inp):
+    if session.terminal_called:
+        return _err("permanent", False, "terminal tool already called this claim")
+    # validation, missing-field check, build record, _append_jsonl, set session.escalation
 
 # ----------------------------------------------------------------------------
 # Dispatcher
@@ -153,7 +193,22 @@ _DISPATCH = {
     "route_to_adjuster": _t_route_to_adjuster,
     "escalate_to_human": _t_escalate_to_human,
 }
-
+def _t_classify_claim(session: ClaimSession, inp: dict[str, Any]) -> str:
+    claim_type = inp.get("claim_type")
+    confidence = inp.get("confidence")
+    rationale = inp.get("rationale")
+    if claim_type not in CLAIM_TYPES:
+        return _err("permanent", False, f"claim_type must be one of {CLAIM_TYPES}")
+    if not isinstance(confidence, (int, float)) or not 0.0 <= float(confidence) <= 1.0:
+        return _err("permanent", False, "confidence must be a number in [0,1]")
+    if not isinstance(rationale, str):
+        return _err("permanent", False, "rationale must be a string")
+    session.classification = {
+        "claim_type": claim_type,
+        "confidence": float(confidence),
+        "rationale": rationale,
+    }
+    return _ok({"recorded": True, **session.classification})
 
 def make_executor(session: ClaimSession) -> Executor:
     """Return a ToolExecutor callable bound to this session."""
